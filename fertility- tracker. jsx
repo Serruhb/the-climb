@@ -1,0 +1,605 @@
+import { useState, useEffect } from "react";
+
+// ── Design tokens ──────────────────────────────────────────────
+// Palette: soft sage + warm blush + deep plum + cream
+// Type: system serif for headings, clean sans for data
+// Signature: a living "benefit meter" that fills like a heartbeat graph
+const COLORS = {
+  plum: "#4A2C4E",
+  sage: "#7A9E7E",
+  blush: "#E8B4B8",
+  cream: "#FAF7F2",
+  mist: "#EEE8F0",
+  dustyRose: "#C9848A",
+  ink: "#2C2030",
+  fog: "#A89BAE",
+  white: "#FFFFFF",
+  green: "#5A8F6A",
+  amber: "#C8860A",
+  red: "#B94A52",
+};
+
+const BENEFIT_TOTAL = 20000;
+const REIMBURSE_TOTAL = 5000;
+const DEDUCTIBLE = 3000;
+const HRA = 2000;
+
+// ── Persistent storage helpers ─────────────────────────────────
+async function load(key) {
+  try {
+    const r = await window.storage.get(key, true);
+    return r ? JSON.parse(r.value) : null;
+  } catch { return null; }
+}
+async function save(key, val) {
+  try { await window.storage.set(key, JSON.stringify(val), true); } catch {}
+}
+
+// ── Tiny UI atoms ──────────────────────────────────────────────
+const Card = ({ children, style = {} }) => (
+  <div style={{
+    background: COLORS.white, borderRadius: 16,
+    padding: "20px 24px", marginBottom: 16,
+    boxShadow: "0 2px 12px rgba(74,44,78,0.07)",
+    ...style
+  }}>{children}</div>
+);
+
+const Tag = ({ children, color = COLORS.mist, text = COLORS.plum }) => (
+  <span style={{
+    background: color, color: text, borderRadius: 99,
+    padding: "2px 10px", fontSize: 11, fontWeight: 600,
+    letterSpacing: "0.04em", textTransform: "uppercase",
+  }}>{children}</span>
+);
+
+const Btn = ({ children, onClick, variant = "primary", small = false, disabled = false }) => {
+  const styles = {
+    primary: { background: COLORS.plum, color: COLORS.white, border: "none" },
+    secondary: { background: "transparent", color: COLORS.plum, border: `1.5px solid ${COLORS.plum}` },
+    ghost: { background: "transparent", color: COLORS.fog, border: "none" },
+    danger: { background: "transparent", color: COLORS.red, border: `1.5px solid ${COLORS.red}` },
+  };
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      ...styles[variant],
+      borderRadius: 8, padding: small ? "5px 12px" : "9px 18px",
+      fontSize: small ? 12 : 14, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer",
+      opacity: disabled ? 0.5 : 1, transition: "opacity .15s",
+    }}>{children}</button>
+  );
+};
+
+const Input = ({ label, value, onChange, type = "text", placeholder = "", required = false }) => (
+  <div style={{ marginBottom: 14 }}>
+    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.fog, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+      {label}{required && <span style={{ color: COLORS.dustyRose }}> *</span>}
+    </label>
+    <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+      style={{
+        width: "100%", padding: "9px 12px", borderRadius: 8, fontSize: 14, color: COLORS.ink,
+        border: `1.5px solid ${COLORS.mist}`, background: COLORS.cream, boxSizing: "border-box",
+        outline: "none",
+      }} />
+  </div>
+);
+
+const Select = ({ label, value, onChange, options }) => (
+  <div style={{ marginBottom: 14 }}>
+    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: COLORS.fog, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</label>
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{
+        width: "100%", padding: "9px 12px", borderRadius: 8, fontSize: 14, color: COLORS.ink,
+        border: `1.5px solid ${COLORS.mist}`, background: COLORS.cream, boxSizing: "border-box",
+      }}>
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  </div>
+);
+
+// ── Benefit meter ──────────────────────────────────────────────
+const BenefitMeter = ({ label, used, total, color = COLORS.sage }) => {
+  const pct = Math.min((used / total) * 100, 100);
+  const remaining = Math.max(total - used, 0);
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink }}>{label}</span>
+        <span style={{ fontSize: 12, color: COLORS.fog }}>${remaining.toLocaleString()} left of ${total.toLocaleString()}</span>
+      </div>
+      <div style={{ background: COLORS.mist, borderRadius: 99, height: 10, overflow: "hidden" }}>
+        <div style={{
+          width: `${pct}%`, height: "100%", borderRadius: 99,
+          background: pct > 85 ? COLORS.red : pct > 60 ? COLORS.amber : color,
+          transition: "width 0.6s cubic-bezier(.4,0,.2,1)",
+        }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+        <span style={{ fontSize: 11, color: COLORS.fog }}>${used.toLocaleString()} used</span>
+        <span style={{ fontSize: 11, color: COLORS.fog }}>{pct.toFixed(0)}%</span>
+      </div>
+    </div>
+  );
+};
+
+// ── Nav ────────────────────────────────────────────────────────
+const NAV = [
+  { id: "overview", label: "Overview" },
+  { id: "appointments", label: "Appointments" },
+  { id: "costs", label: "Costs" },
+  { id: "insurance", label: "Insurance" },
+  { id: "checklist", label: "Checklist" },
+];
+
+// ── Main App ───────────────────────────────────────────────────
+export default function App() {
+  const [tab, setTab] = useState("overview");
+  const [appointments, setAppointments] = useState([]);
+  const [costs, setCosts] = useState([]);
+  const [checklist, setChecklist] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load data
+  useEffect(() => {
+    (async () => {
+      const a = await load("ivf:appointments") || [];
+      const c = await load("ivf:costs") || [];
+      const ch = await load("ivf:checklist") || defaultChecklist();
+      setAppointments(a);
+      setCosts(c);
+      setChecklist(ch);
+      setLoading(false);
+    })();
+  }, []);
+
+  const saveAppointments = async (data) => { setAppointments(data); await save("ivf:appointments", data); };
+  const saveCosts = async (data) => { setCosts(data); await save("ivf:costs", data); };
+  const saveChecklist = async (data) => { setChecklist(data); await save("ivf:checklist", data); };
+
+  const totalSpent = costs.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  const fertilitySpent = costs.filter(c => c.bucket === "fertility").reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  const reimburseSpent = costs.filter(c => c.bucket === "reimbursement").reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  const deductibleSpent = costs.filter(c => c.appliesDeductible).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+
+  if (loading) return (
+    <div style={{ minHeight: "100vh", background: COLORS.cream, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <span style={{ color: COLORS.fog, fontSize: 15 }}>Loading your journey...</span>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: COLORS.cream, fontFamily: "'Inter', system-ui, sans-serif" }}>
+      {/* Header */}
+      <div style={{ background: COLORS.plum, padding: "24px 24px 0" }}>
+        <div style={{ marginBottom: 4 }}>
+          <span style={{ color: COLORS.blush, fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>IVF of Bedford, NH</span>
+        </div>
+        <h1 style={{ color: COLORS.white, fontSize: 22, fontWeight: 800, margin: "0 0 20px", fontFamily: "Georgia, serif" }}>
+          Your Fertility Journey
+        </h1>
+        {/* Nav */}
+        <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+          {NAV.map(n => (
+            <button key={n.id} onClick={() => setTab(n.id)} style={{
+              background: tab === n.id ? COLORS.white : "transparent",
+              color: tab === n.id ? COLORS.plum : COLORS.blush,
+              border: "none", borderRadius: "8px 8px 0 0", padding: "8px 14px",
+              fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+              transition: "all .15s",
+            }}>{n.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ padding: "20px 16px", maxWidth: 700, margin: "0 auto" }}>
+        {tab === "overview" && <Overview appointments={appointments} costs={costs} checklist={checklist}
+          fertilitySpent={fertilitySpent} reimburseSpent={reimburseSpent} deductibleSpent={deductibleSpent} />}
+        {tab === "appointments" && <Appointments appointments={appointments} onSave={saveAppointments} />}
+        {tab === "costs" && <Costs costs={costs} onSave={saveCosts} />}
+        {tab === "insurance" && <Insurance />}
+        {tab === "checklist" && <Checklist checklist={checklist} onSave={saveChecklist} />}
+      </div>
+    </div>
+  );
+}
+
+// ── Overview ───────────────────────────────────────────────────
+function Overview({ appointments, costs, checklist, fertilitySpent, reimburseSpent, deductibleSpent }) {
+  const upcoming = appointments.filter(a => a.status === "scheduled" && a.date >= today()).sort((a, b) => a.date.localeCompare(b.date));
+  const done = checklist.filter(c => c.done).length;
+
+  return (
+    <div>
+      <Card>
+        <h2 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Benefit Status</h2>
+        <BenefitMeter label="Cigna Fertility Benefit" used={fertilitySpent} total={BENEFIT_TOTAL} color={COLORS.sage} />
+        <BenefitMeter label="Storable Reimbursement" used={reimburseSpent} total={REIMBURSE_TOTAL} color={COLORS.dustyRose} />
+        <BenefitMeter label="Annual Deductible" used={Math.min(deductibleSpent, DEDUCTIBLE)} total={DEDUCTIBLE} color={COLORS.fog} />
+        <div style={{ marginTop: 10, padding: "10px 14px", background: COLORS.mist, borderRadius: 10 }}>
+          <span style={{ fontSize: 12, color: COLORS.plum, fontWeight: 600 }}>HRA Balance (employer-funded): </span>
+          <span style={{ fontSize: 12, color: COLORS.green, fontWeight: 700 }}>${Math.max(HRA - Math.min(deductibleSpent, HRA), 0).toLocaleString()} available</span>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Next Up</h2>
+        {upcoming.length === 0
+          ? <p style={{ color: COLORS.fog, fontSize: 14, margin: 0 }}>No upcoming appointments yet. Add one in the Appointments tab.</p>
+          : upcoming.slice(0, 3).map(a => (
+            <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+              <div style={{ background: COLORS.mist, borderRadius: 10, padding: "6px 10px", textAlign: "center", minWidth: 44 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.plum, lineHeight: 1 }}>{new Date(a.date + "T12:00:00").getDate()}</div>
+                <div style={{ fontSize: 10, color: COLORS.fog, textTransform: "uppercase" }}>{new Date(a.date + "T12:00:00").toLocaleString("en", { month: "short" })}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.ink }}>{a.title}</div>
+                <div style={{ fontSize: 12, color: COLORS.fog }}>{a.provider}{a.time ? ` at ${a.time}` : ""}</div>
+              </div>
+              {a.insurance && <Tag color={COLORS.mist}>{a.insurance}</Tag>}
+            </div>
+          ))
+        }
+      </Card>
+
+      <Card>
+        <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Checklist Progress</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ fontSize: 32, fontWeight: 800, color: COLORS.plum }}>{done}<span style={{ fontSize: 16, color: COLORS.fog }}>/{checklist.length}</span></div>
+          <div style={{ flex: 1 }}>
+            <div style={{ background: COLORS.mist, borderRadius: 99, height: 8 }}>
+              <div style={{ width: `${(done / checklist.length) * 100}%`, height: "100%", background: COLORS.sage, borderRadius: 99, transition: "width .4s" }} />
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.fog, marginTop: 4 }}>{checklist.length - done} items remaining</div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── Appointments ───────────────────────────────────────────────
+const APPT_TYPES = [
+  { value: "consultation", label: "Consultation" },
+  { value: "bloodwork", label: "Bloodwork / Labs" },
+  { value: "ultrasound", label: "Ultrasound / Monitoring" },
+  { value: "retrieval", label: "Egg Retrieval" },
+  { value: "transfer", label: "Embryo Transfer" },
+  { value: "followup", label: "Follow-up" },
+  { value: "pcp", label: "PCP / Primary Care" },
+  { value: "other", label: "Other" },
+];
+
+const STATUS_OPTS = [
+  { value: "scheduled", label: "Scheduled" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" },
+];
+
+const INS_OPTS = [
+  { value: "Your Cigna PPO", label: "Your Cigna PPO" },
+  { value: "Tyler's Dover PPO", label: "Tyler's Dover PPO" },
+  { value: "Both / Coordinate", label: "Both / Coordinate" },
+  { value: "Out of pocket", label: "Out of pocket" },
+];
+
+function emptyAppt() {
+  return { id: Date.now(), date: "", time: "", title: "", type: "consultation", provider: "IVF of Bedford", insurance: "Your Cigna PPO", status: "scheduled", notes: "" };
+}
+
+function Appointments({ appointments, onSave }) {
+  const [form, setForm] = useState(null);
+  const [filter, setFilter] = useState("all");
+
+  const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = () => {
+    if (!form.date || !form.title) return;
+    const exists = appointments.find(a => a.id === form.id);
+    const next = exists ? appointments.map(a => a.id === form.id ? form : a) : [...appointments, { ...form, id: Date.now() }];
+    onSave(next);
+    setForm(null);
+  };
+
+  const remove = (id) => onSave(appointments.filter(a => a.id !== id));
+
+  const filtered = appointments.filter(a => filter === "all" || a.status === filter)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const statusColor = { scheduled: COLORS.sage, completed: COLORS.fog, cancelled: COLORS.dustyRose };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Appointments</h2>
+        <Btn onClick={() => setForm(emptyAppt())}>+ Add</Btn>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["all", "scheduled", "completed"].map(s => (
+          <button key={s} onClick={() => setFilter(s)} style={{
+            background: filter === s ? COLORS.plum : COLORS.white, color: filter === s ? COLORS.white : COLORS.fog,
+            border: `1.5px solid ${filter === s ? COLORS.plum : COLORS.mist}`, borderRadius: 99,
+            padding: "4px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", textTransform: "capitalize",
+          }}>{s}</button>
+        ))}
+      </div>
+
+      {form && (
+        <Card style={{ border: `2px solid ${COLORS.blush}` }}>
+          <h3 style={{ margin: "0 0 14px", color: COLORS.plum, fontSize: 14, fontWeight: 800 }}>{form.id && appointments.find(a => a.id === form.id) ? "Edit" : "New"} Appointment</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Input label="Date" value={form.date} onChange={v => upd("date", v)} type="date" required />
+            <Input label="Time" value={form.time} onChange={v => upd("time", v)} type="time" />
+          </div>
+          <Input label="Appointment name" value={form.title} onChange={v => upd("title", v)} placeholder="e.g. Initial Consult with Dr. Smith" required />
+          <Select label="Type" value={form.type} onChange={v => upd("type", v)} options={APPT_TYPES} />
+          <Input label="Provider / Location" value={form.provider} onChange={v => upd("provider", v)} />
+          <Select label="Insurance to use" value={form.insurance} onChange={v => upd("insurance", v)} options={INS_OPTS} />
+          <Select label="Status" value={form.status} onChange={v => upd("status", v)} options={STATUS_OPTS} />
+          <Input label="Notes" value={form.notes} onChange={v => upd("notes", v)} placeholder="e.g. Bring insurance card, fasting required" />
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <Btn onClick={submit} disabled={!form.date || !form.title}>Save</Btn>
+            <Btn variant="secondary" onClick={() => setForm(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+
+      {filtered.length === 0
+        ? <Card><p style={{ color: COLORS.fog, fontSize: 14, margin: 0 }}>No appointments here yet.</p></Card>
+        : filtered.map(a => (
+          <Card key={a.id} style={{ borderLeft: `4px solid ${statusColor[a.status] || COLORS.fog}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: COLORS.ink }}>{a.title}</span>
+                  <Tag>{a.type}</Tag>
+                  <Tag color={a.status === "completed" ? COLORS.mist : a.status === "cancelled" ? "#FDE8E9" : "#E8F5E9"}
+                    text={statusColor[a.status]}>{a.status}</Tag>
+                </div>
+                <div style={{ fontSize: 13, color: COLORS.fog }}>
+                  {formatDate(a.date)}{a.time ? ` at ${a.time}` : ""} &bull; {a.provider}
+                </div>
+                <div style={{ fontSize: 12, color: COLORS.dustyRose, marginTop: 2, fontWeight: 600 }}>{a.insurance}</div>
+                {a.notes && <div style={{ fontSize: 12, color: COLORS.fog, marginTop: 6, fontStyle: "italic" }}>{a.notes}</div>}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginLeft: 8 }}>
+                <Btn small variant="ghost" onClick={() => setForm({ ...a })}>Edit</Btn>
+                <Btn small variant="danger" onClick={() => remove(a.id)}>Del</Btn>
+              </div>
+            </div>
+          </Card>
+        ))
+      }
+    </div>
+  );
+}
+
+// ── Costs ──────────────────────────────────────────────────────
+const BUCKET_OPTS = [
+  { value: "fertility", label: "Fertility benefit ($20k)" },
+  { value: "reimbursement", label: "Storable reimbursement ($5k)" },
+  { value: "deductible", label: "Deductible / general" },
+  { value: "oop", label: "Out of pocket (other)" },
+];
+
+function emptyCost() {
+  return { id: Date.now(), date: "", description: "", amount: "", bucket: "fertility", appliesDeductible: false, paidBy: "Your Cigna", notes: "" };
+}
+
+function Costs({ costs, onSave }) {
+  const [form, setForm] = useState(null);
+  const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = () => {
+    if (!form.date || !form.description || !form.amount) return;
+    const exists = costs.find(c => c.id === form.id);
+    const next = exists ? costs.map(c => c.id === form.id ? form : c) : [...costs, { ...form, id: Date.now() }];
+    onSave(next);
+    setForm(null);
+  };
+
+  const remove = (id) => onSave(costs.filter(c => c.id !== id));
+  const sorted = [...costs].sort((a, b) => b.date.localeCompare(a.date));
+
+  const bucketColor = { fertility: COLORS.sage, reimbursement: COLORS.dustyRose, deductible: COLORS.fog, oop: COLORS.amber };
+  const totalAll = costs.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Cost Tracker</h2>
+        <Btn onClick={() => setForm(emptyCost())}>+ Add</Btn>
+      </div>
+
+      <Card style={{ background: COLORS.plum, color: COLORS.white }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.blush, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>Total Logged</div>
+        <div style={{ fontSize: 32, fontWeight: 800 }}>${totalAll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        <div style={{ fontSize: 12, color: COLORS.blush, marginTop: 4 }}>{costs.length} expense{costs.length !== 1 ? "s" : ""} recorded</div>
+      </Card>
+
+      {form && (
+        <Card style={{ border: `2px solid ${COLORS.blush}` }}>
+          <h3 style={{ margin: "0 0 14px", color: COLORS.plum, fontSize: 14, fontWeight: 800 }}>Log an Expense</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+            <Input label="Date" value={form.date} onChange={v => upd("date", v)} type="date" required />
+            <Input label="Amount ($)" value={form.amount} onChange={v => upd("amount", v)} type="number" placeholder="0.00" required />
+          </div>
+          <Input label="Description" value={form.description} onChange={v => upd("description", v)} placeholder="e.g. Egg retrieval procedure" required />
+          <Select label="Which benefit bucket" value={form.bucket} onChange={v => upd("bucket", v)} options={BUCKET_OPTS} />
+          <Select label="Billed to" value={form.paidBy} onChange={v => upd("paidBy", v)} options={[
+            { value: "Your Cigna", label: "Your Cigna PPO" },
+            { value: "Tyler's Dover", label: "Tyler's Dover PPO" },
+            { value: "Out of pocket", label: "Out of pocket" },
+          ]} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+            <input type="checkbox" id="ded" checked={form.appliesDeductible} onChange={e => upd("appliesDeductible", e.target.checked)} />
+            <label htmlFor="ded" style={{ fontSize: 13, color: COLORS.ink, cursor: "pointer" }}>Counts toward deductible</label>
+          </div>
+          <Input label="Notes" value={form.notes} onChange={v => upd("notes", v)} placeholder="e.g. EOB received, submitted for reimbursement" />
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn onClick={submit} disabled={!form.date || !form.description || !form.amount}>Save</Btn>
+            <Btn variant="secondary" onClick={() => setForm(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+
+      {sorted.length === 0
+        ? <Card><p style={{ color: COLORS.fog, fontSize: 14, margin: 0 }}>No expenses logged yet.</p></Card>
+        : sorted.map(c => (
+          <Card key={c.id}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: COLORS.ink }}>{c.description}</span>
+                  <Tag color={COLORS.mist} text={bucketColor[c.bucket] || COLORS.fog}>{BUCKET_OPTS.find(b => b.value === c.bucket)?.label.split(" (")[0]}</Tag>
+                  {c.appliesDeductible && <Tag color="#FFF3E0" text={COLORS.amber}>Deductible</Tag>}
+                </div>
+                <div style={{ fontSize: 13, color: COLORS.fog }}>{formatDate(c.date)} &bull; {c.paidBy}</div>
+                {c.notes && <div style={{ fontSize: 12, color: COLORS.fog, marginTop: 4, fontStyle: "italic" }}>{c.notes}</div>}
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
+                <span style={{ fontSize: 16, fontWeight: 800, color: COLORS.plum }}>${parseFloat(c.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <Btn small variant="ghost" onClick={() => setForm({ ...c })}>Edit</Btn>
+                <Btn small variant="danger" onClick={() => remove(c.id)}>Del</Btn>
+              </div>
+            </div>
+          </Card>
+        ))
+      }
+    </div>
+  );
+}
+
+// ── Insurance Comparison ───────────────────────────────────────
+function Insurance() {
+  const rows = [
+    { label: "Plan Type", you: "Cigna PPO (Buy-Up)", tyler: "Dover PPO" },
+    { label: "Monthly Premium", you: "~$240/mo", tyler: "TBD" },
+    { label: "Annual Deductible", you: "$3,000", tyler: "TBD" },
+    { label: "PCP Copay", you: "$25", tyler: "TBD" },
+    { label: "Specialist Copay", you: "$50", tyler: "TBD" },
+    { label: "Fertility Benefit", you: "$20,000 lifetime", tyler: "Unknown" },
+    { label: "Reimbursement Benefit", you: "$5,000 (Storable)", tyler: "None known" },
+    { label: "HRA (Employer)", you: "$2,000/yr", tyler: "Unknown" },
+    { label: "IVF Coverage", you: "Yes (after Dx)", tyler: "TBD" },
+    { label: "IUI Coverage", you: "Yes (after Dx)", tyler: "TBD" },
+    { label: "Behavioral Health", you: "Strong (Cigna)", tyler: "TBD" },
+    { label: "Network", you: "Cigna Open Access Plus", tyler: "Dover network" },
+  ];
+
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 6px", fontSize: 17, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Insurance Comparison</h2>
+      <p style={{ color: COLORS.fog, fontSize: 13, marginTop: 0, marginBottom: 16 }}>Your Storable plan vs. Tyler's Dover plan. Update Tyler's details once you have them.</p>
+
+      <Card style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr" }}>
+          <div style={{ padding: "10px 14px", background: COLORS.mist, fontSize: 12, fontWeight: 700, color: COLORS.fog, textTransform: "uppercase" }}></div>
+          <div style={{ padding: "10px 14px", background: COLORS.plum, fontSize: 13, fontWeight: 800, color: COLORS.white, textAlign: "center" }}>Your Cigna</div>
+          <div style={{ padding: "10px 14px", background: COLORS.fog, fontSize: 13, fontWeight: 800, color: COLORS.white, textAlign: "center" }}>Tyler's Dover</div>
+        </div>
+        {rows.map((r, i) => (
+          <div key={r.label} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", background: i % 2 === 0 ? COLORS.cream : COLORS.white }}>
+            <div style={{ padding: "10px 14px", fontSize: 12, fontWeight: 700, color: COLORS.fog, borderRight: `1px solid ${COLORS.mist}` }}>{r.label}</div>
+            <div style={{ padding: "10px 14px", fontSize: 13, color: COLORS.ink, borderRight: `1px solid ${COLORS.mist}`, textAlign: "center" }}>{r.you}</div>
+            <div style={{ padding: "10px 14px", fontSize: 13, color: r.tyler.includes("TBD") ? COLORS.fog : COLORS.ink, textAlign: "center", fontStyle: r.tyler.includes("TBD") ? "italic" : "normal" }}>{r.tyler}</div>
+          </div>
+        ))}
+      </Card>
+
+      <Card style={{ background: COLORS.mist, marginTop: 0 }}>
+        <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: COLORS.plum }}>Current Recommendation</h3>
+        <p style={{ fontSize: 13, color: COLORS.ink, margin: "0 0 8px" }}>Stay on your Storable Cigna PPO for now. Reasons:</p>
+        {["$20k fertility benefit is confirmed and documented", "Storable adds $5k reimbursement on top of Cigna coverage", "Strong behavioral health coverage for therapy continuity", "HRA gives you $2k/yr in free employer money", "After marriage, revisit Tyler's Dover plan if fertility network is comparable"].map(r => (
+          <div key={r} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            <span style={{ color: COLORS.sage, fontWeight: 800, flexShrink: 0 }}>+</span>
+            <span style={{ fontSize: 13, color: COLORS.ink }}>{r}</span>
+          </div>
+        ))}
+      </Card>
+
+      <Card>
+        <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 800, color: COLORS.plum }}>When to Consider Switching</h3>
+        {[
+          { q: "After marriage", a: "Add Tyler as spouse and compare total family cost" },
+          { q: "If Dover covers IVF equally", a: "Compare total out-of-pocket for a full IVF cycle" },
+          { q: "Open enrollment", a: "Reevaluate both plans with your actual fertility spend to date" },
+        ].map(item => (
+          <div key={item.q} style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink }}>{item.q}</div>
+            <div style={{ fontSize: 12, color: COLORS.fog }}>{item.a}</div>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+// ── Checklist ──────────────────────────────────────────────────
+function Checklist({ checklist, onSave }) {
+  const toggle = (id) => onSave(checklist.map(c => c.id === id ? { ...c, done: !c.done } : c));
+
+  const groups = [...new Set(checklist.map(c => c.group))];
+
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 6px", fontSize: 17, fontWeight: 800, color: COLORS.plum, fontFamily: "Georgia, serif" }}>Next Steps Checklist</h2>
+      <p style={{ color: COLORS.fog, fontSize: 13, marginTop: 0, marginBottom: 16 }}>Tap to check off items as you complete them.</p>
+
+      {groups.map(g => (
+        <div key={g}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: COLORS.dustyRose, textTransform: "uppercase", letterSpacing: "0.1em", margin: "18px 0 8px" }}>{g}</div>
+          {checklist.filter(c => c.group === g).map(item => (
+            <div key={item.id} onClick={() => toggle(item.id)} style={{
+              display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px",
+              background: item.done ? COLORS.mist : COLORS.white, borderRadius: 10, marginBottom: 6,
+              cursor: "pointer", border: `1.5px solid ${item.done ? COLORS.mist : COLORS.blush}`,
+              opacity: item.done ? 0.7 : 1, transition: "all .15s",
+            }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: 6, border: `2px solid ${item.done ? COLORS.sage : COLORS.blush}`,
+                background: item.done ? COLORS.sage : "transparent", display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0, marginTop: 1,
+              }}>
+                {item.done && <span style={{ color: COLORS.white, fontSize: 12, fontWeight: 800 }}>✓</span>}
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: item.done ? 400 : 700, color: item.done ? COLORS.fog : COLORS.ink, textDecoration: item.done ? "line-through" : "none" }}>{item.label}</div>
+                {item.note && <div style={{ fontSize: 12, color: COLORS.fog, marginTop: 2 }}>{item.note}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Default checklist ──────────────────────────────────────────
+function defaultChecklist() {
+  return [
+    { id: 1, group: "Insurance Setup", label: "Confirm Cigna PPO enrollment is active", note: "Log in to myCigna.com", done: false },
+    { id: 2, group: "Insurance Setup", label: "Create myCigna account", note: "mycigna.com - have your member ID ready", done: false },
+    { id: 3, group: "Insurance Setup", label: "Verify $20k fertility benefit is on your plan", note: "Call Cigna or check benefit summary", done: false },
+    { id: 4, group: "Insurance Setup", label: "Understand HRA claims process via Lively", note: "Employer contributes $2,000/yr", done: false },
+    { id: 5, group: "Insurance Setup", label: "Contact benefits@storable.com about $5k reimbursement process", done: false },
+    { id: 6, group: "Fertility Clinic", label: "Call IVF of Bedford NH to verify in-network with Cigna", done: false },
+    { id: 7, group: "Fertility Clinic", label: "Schedule initial fertility consultation", done: false },
+    { id: 8, group: "Fertility Clinic", label: "Bring insurance card and referral if needed", done: false },
+    { id: 9, group: "Fertility Clinic", label: "Ask clinic about infertility diagnosis process", note: "Required before IVF/IUI benefits activate", done: false },
+    { id: 10, group: "Primary Care", label: "Reschedule PCP annual physical", note: "Wait until insurance is confirmed active", done: false },
+    { id: 11, group: "Primary Care", label: "Coordinate fertility testing with PCP", note: "Avoid duplicate labs between PCP and specialist", done: false },
+    { id: 12, group: "Primary Care", label: "Discuss current prescriptions and therapy with PCP", done: false },
+    { id: 13, group: "After Marriage", label: "Review Tyler's Dover plan details", note: "Get benefit summary from Tyler's HR", done: false },
+    { id: 14, group: "After Marriage", label: "Compare family coverage costs (Cigna vs Dover)", done: false },
+    { id: 15, group: "After Marriage", label: "Decide on coverage at next open enrollment or qualifying event", done: false },
+  ];
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+function today() { return new Date().toISOString().split("T")[0]; }
+function formatDate(d) {
+  if (!d) return "";
+  return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
