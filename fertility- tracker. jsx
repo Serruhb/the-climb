@@ -16,7 +16,7 @@ const COLORS = {
   white: "#FFFFFF",
   green: "#5A8F6A",
   amber: "#C8860A",
-  red: "#B94A52",
+  red: "#B94A52", 
 };
 
 const BENEFIT_TOTAL = 20000;
